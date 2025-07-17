@@ -20,8 +20,6 @@ int init_vad(VadInst* vad, int mode) {
     return WebRtcVad_set_mode(vad, mode);
 }
 
-// Fix here: WebRtcVad_Process expects frame length in samples, 
-// but your JS code passes 320, which is correct for 20ms @16kHz
 EMSCRIPTEN_KEEPALIVE
 int is_speech(VadInst* vad, int16_t* audio_frame, int sample_rate, int frame_length) {
     if (!vad) return -1;
