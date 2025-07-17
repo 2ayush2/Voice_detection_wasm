@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>WebRTC VAD WASM Test</title>
+</head>
+<body>
+  <h2>WebRTC VAD (WASM) - Mic Test</h2>
+  <button id="start">Start VAD</button>
+  <p id="status">Status: Idle</p>
+
+  <script>
+    let ModuleInstance;
+
+    // Dynamically load vad.js script and wait for it to load
+    function loadWasmScript() {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "vad.js";  // Make sure this path is correct relative to your HTML file
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error("Failed to load vad.js"));
+        document.body.appendChild(script);
+      });
+    }
+
+    async function init() {
+      try {
+        await loadWasmScript();
+
+        // createModule() is defined inside vad.js because of MODULARIZE=1
+        ModuleInstance = await createModule();
+
+        startApp();
+      } catch (e) {
+        console.error(e);
+        alert("Error loading WASM module: " + e.message);
+      }
+    }
+
+    function startApp() {
+      const startButton = document.getElementById("start");
+      const status = document.getElementById("status");
+
+      // Wrap your exported C functions
+      const createVad = ModuleInstance.cwrap("create_vad", "number", []);
+      const initVad = ModuleInstance.cwrap("init_vad", "number", ["number", "number"]);
+      const isSpeech = ModuleInstance.cwrap("is_speech", "number", ["number", "number", "number", "number"]);
+      const freeVad = ModuleInstance.cwrap("free_vad", "void", ["number"]);
+
+      let vadPtr = 0;
+
+      startButton.onclick = async () => {
+        if (!vadPtr) {
+          vadPtr = createVad();
+          initVad(vadPtr, 3); // aggressive mode
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const context = new AudioContext();
+        const source = context.createMediaStreamSource(stream);
+        const processor = context.createScriptProcessor(4096, 1, 1);
+        source.connect(processor);
+        processor.connect(context.destination);
+
+        processor.onaudioprocess = (e) => {
+          const input = e.inputBuffer.getChannelData(0);
+          const frame = new Int16Array(160); // 10ms @ 16kHz
+
+          for (let i = 0; i < 160; i++) {
+            frame[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
+          }
+
+          const ptr = ModuleInstance._malloc(frame.length * frame.BYTES_PER_ELEMENT);
+          ModuleInstance.HEAP16.set(frame, ptr >> 1);
+
+          // Call is_speech with vadPtr, pointer to audio data, sample rate, and frame length
+          const result = isSpeech(vadPtr, ptr, 16000, 160);
+
+          ModuleInstance._free(ptr);
+
+          if (result === 1) {
+            status.innerText = "Status: Speaking";
+          } else if (result === 0) {
+            status.innerText = "Status: Silent";
+          } else {
+            status.innerText = "Status: Error";
+          }
+        };
+      };
+    }
+
+    // Start everything
+    init();
+  </script>
+</body>
+</html>
